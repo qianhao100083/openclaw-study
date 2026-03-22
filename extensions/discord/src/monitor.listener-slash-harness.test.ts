@@ -8,6 +8,15 @@ import {
   createFinalTextPayload,
   getEnsureConfiguredBindingRouteReadyMock,
 } from "./monitor.listener-slash-harness.test-support.js";
+import {
+  createDiscordMessageHandler,
+  preflightDiscordMessageMock,
+  processDiscordMessageMock,
+} from "./monitor/message-handler.module-test-helpers.js";
+import {
+  createDiscordHandlerParams,
+  createDiscordPreflightContext,
+} from "./monitor/message-handler.test-helpers.js";
 
 function createDeferred() {
   let resolve: () => void = () => {};
@@ -63,6 +72,32 @@ describe("discord listener/slash harness", () => {
     first.resolve();
     second.resolve();
     await Promise.all([first.promise, second.promise]);
+  });
+
+  it("suppresses duplicate listener deliveries before a second Discord dispatch", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    preflightDiscordMessageMock.mockResolvedValue(createDiscordPreflightContext("ch-dup"));
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+    const listenerHarness = createDiscordListenerHarness({
+      handler: async (data, client) => {
+        await handler(data as never, client as never);
+      },
+    });
+    const duplicate = createDiscordListenerEvent({
+      messageId: "m-dup",
+      channelId: "ch-dup",
+    });
+
+    await Promise.all([
+      listenerHarness.listener.handle(duplicate as never, {} as never),
+      listenerHarness.listener.handle(duplicate as never, {} as never),
+    ]);
+
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
   it("routes slash interactions into the expected DM slash and target sessions", async () => {
